@@ -10,7 +10,7 @@ TOKEN = os.environ.get("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
 # URL ve geçmiş dosyası
-URL = "https://quotes.toscrape.com"
+URL = "https://www.ilan.gov.tr/ilan/kategori/693/arastirma-gorevlisi-ogretim-gorevlisi-uzman"
 GECMIS_DOSYA = "gonderilen_ilanlar.txt"
 SUBSCRIBERS_FILE = "users.txt"
 
@@ -84,7 +84,7 @@ def yeni_ilanlari_bul():
 def scrap_loop():
     while True:
         yeni_ilanlari_bul()
-        time.sleep(60)  # 1 dakika
+        time.sleep(600)  # 1 dakika
 
 if __name__ == "__main__":
     # Scraper thread başlat
