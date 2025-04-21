@@ -5,7 +5,7 @@ import time
 import os
 
 # Telegram bilgileri
-TOKEN = "7797092615:AAETVqEPlYhiQRoS7T_rY1oOfEQz02pDQCg"
+TOKEN = "7797092615:AAEdkKXEuMnzbysSogVueCHjx7heWlKf3bk"
 CHAT_ID = 515442086  # Sadece senin chat ID'n
 bot = telebot.TeleBot(TOKEN)
 
