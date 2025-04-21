@@ -9,7 +9,7 @@ TOKEN = "7797092615:AAFBNobmedc04sE9OBUI-UeB9vxMJJfGjPE"
 CHAT_ID = "515442086"
 bot = telebot.TeleBot(TOKEN)
 
-URL = "https://www.ilan.gov.tr/ilan/kategori/693/arastirma-gorevlisi-ogretim-gorevlisi-uzman"
+URL = "https://quotes.toscrape.com"
 GECMIS_DOSYA = "gonderilen_ilanlar.txt"
 
 def okunan_linkler():
