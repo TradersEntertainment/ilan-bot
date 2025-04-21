@@ -49,4 +49,4 @@ def yeni_ilanlari_bul():
 print("📣 Takip başlatıldı.")
 while True:
     yeni_ilanlari_bul()
-    time.sleep(10800)  # 3 saat = 10800 saniye
+    time.sleep(60)  # 3 saat = 10800 saniye
