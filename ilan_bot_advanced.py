@@ -51,29 +51,37 @@ def okunan_linkler():
 
 def yeni_ilanlari_bul():
     print("🔍 İlanlar kontrol ediliyor...")
-    r = requests.get(URL, verify=False)
+    r = requests.get(URL, verify=False, timeout=15)
     soup = BeautifulSoup(r.text, 'html.parser')
 
-    # En başta kaç tane eleman bulduğumuzu logla:
-    ilanlar = soup.find_all("div", class_="card-body")
-    print(f"📦 Bulunan card-body sayısı: {len(ilanlar)}")
+    # 1) Artık <a class="card-list-item"> öğelerini seçiyoruz
+    ilanlar = soup.find_all("a", class_="card-list-item")
+    print(f"📦 Bulunan ilan sayısı: {len(ilanlar)}")
 
     onceki_linkler = okunan_linkler()
     yeni_linkler = []
 
     for ilan in ilanlar:
         try:
-            a_tag = ilan.find("a")
-            baslik = a_tag.text.strip()
-            link = "https://www.ilan.gov.tr" + a_tag["href"]
+            href = ilan["href"]
+            link = "https://www.ilan.gov.tr" + href
+            baslik = ilan.find("h3", class_="card-header").get_text(strip=True)
+            tarih  = ilan.find("div", class_="card-footer").get_text(strip=True)
 
-            # İşte burası: her bulduğumuz linki logluyoruz
-            print(f"[DEBUG] Bulunan ilan: “{baslik}” → {link}")
+            # Debug log
+            print(f"[DEBUG] {baslik} | {tarih} → {link}")
 
             if link not in onceki_linkler:
-                mesaj = f"📢 Yeni ilan:\n{baslik}\n{link}"
-                bot.send_message(CHAT_ID, mesaj)
+                mesaj = (
+                    f"📢 *Yeni İlan*\n"
+                    f"*{baslik}*\n"
+                    f"_{tarih}_\n"
+                    f"{link}"
+                )
+                bot.send_message(CHAT_ID, mesaj, parse_mode="Markdown")
                 yeni_linkler.append(link)
+            else:
+                print("⏭️ Zaten gönderilmiş, atlanıyor.")
         except Exception as e:
             print(f"⚠️ Döngü hatası: {e}")
             continue
@@ -84,7 +92,8 @@ def yeni_ilanlari_bul():
             for l in yeni_linkler:
                 f.write(l + "\n")
     else:
-        print("⏭️ Yeni ilan bulunamadı ya da zaten gönderilmiş.")
+        print("🔍 Yeni ilan bulunamadı.")
+
 
 
 # Arka planda ilan kontrol döngüsü
