@@ -3,87 +3,83 @@ from bs4 import BeautifulSoup
 import telebot
 import time
 import os
-import threading
 import logging
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
+import flask
 
-# SSL uyarılarını kapat
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
-
-# Logging ayarları
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Telegram bilgileri
+# Flask app (for webhook)
+app = flask.Flask(__name__)
+
+# Bot configuration
 TOKEN = os.environ.get("BOT_TOKEN")
 if not TOKEN:
-    logger.error("BOT_TOKEN bulunamadı! Lütfen çevre değişkenlerini kontrol edin.")
+    logger.error("BOT_TOKEN not found!")
     exit(1)
+
+bot = telebot.TeleBot(TOKEN)
+logger.info("Bot initialized")
+
+# Render.com specific settings
+PORT = int(os.environ.get('PORT', 8080))
+app_url = os.environ.get('RENDER_EXTERNAL_URL')
+if not app_url:
+    logger.warning("RENDER_EXTERNAL_URL not found, using default webhook")
+    app_url = f"https://{os.environ.get('RENDER_SERVICE_NAME')}.onrender.com"
 
 # URL ve geçmiş dosyası
 URL = "https://www.ilan.gov.tr/ilan/kategori/693/arastirma-gorevlisi-ogretim-gorevlisi-uzman"
 GECMIS_DOSYA = "gonderilen_ilanlar.txt"
 SUBSCRIBERS_FILE = "users.txt"
 
-# İlk başlatma sırasında herhangi bir önceki webhook'u temizle
-bot = None
-
-def setup_bot():
-    global bot
-    try:
-        bot = telebot.TeleBot(TOKEN)
-        # Herhangi bir webhook yapılandırmasını temizle
-        bot.remove_webhook()
-        time.sleep(1)  # API'nin temizlemeyi işlemesi için bekle
-        logger.info("Bot başlatıldı ve webhook temizlendi")
-        return bot
-    except Exception as e:
-        logger.error(f"Bot kurulum hatası: {e}")
-        raise
-
 # Abone listesini oku
 def read_subscribers():
     if not os.path.exists(SUBSCRIBERS_FILE):
+        with open(SUBSCRIBERS_FILE, "w", encoding="utf-8") as f:
+            pass
         return set()
-    try:
-        with open(SUBSCRIBERS_FILE, "r", encoding="utf-8") as f:
-            return set(int(line.strip()) for line in f if line.strip().isdigit())
-    except Exception as e:
-        logger.error(f"Abone listesi okuma hatası: {e}")
-        return set()
+        
+    with open(SUBSCRIBERS_FILE, "r", encoding="utf-8") as f:
+        return set(int(line.strip()) for line in f if line.strip().isdigit())
 
 # Yeni abone ekle
 def write_subscriber(chat_id):
-    try:
-        with open(SUBSCRIBERS_FILE, "a", encoding="utf-8") as f:
-            f.write(f"{chat_id}\n")
-    except Exception as e:
-        logger.error(f"Abone ekleme hatası: {e}")
+    with open(SUBSCRIBERS_FILE, "a", encoding="utf-8") as f:
+        f.write(f"{chat_id}\n")
 
-# /start komutu: abone kaydı
-def setup_handlers(bot):
-    @bot.message_handler(commands=['start'])
-    def subscribe(message):
-        chat_id = message.chat.id
-        try:
-            subs = read_subscribers()
-            if chat_id not in subs:
-                write_subscriber(chat_id)
-                bot.send_message(chat_id, "✅ Bot aboneliğine kaydoldunuz! Yeni ilanları alacaksınız.")
-                logger.info(f"Yeni abone: {chat_id}")
-            else:
-                bot.send_message(chat_id, "ℹ️ Zaten abonesiniz, yeni ilanlar geldikçe bilgilendirileceksiniz.")
-                logger.info(f"Mevcut abone tekrar kaydolmaya çalıştı: {chat_id}")
-        except Exception as e:
-            logger.error(f"Subscribe handler hatası: {e}")
+# /start komutu
+@bot.message_handler(commands=['start'])
+def on_start(message):
+    chat_id = message.chat.id
+    subs = read_subscribers()
+    
+    if chat_id not in subs:
+        write_subscriber(chat_id)
+        bot.send_message(chat_id, "✅ Bot aboneliğine kaydoldunuz! Yeni ilanları alacaksınız.")
+        logger.info(f"New subscriber: {chat_id}")
+    else:
+        bot.send_message(chat_id, "ℹ️ Zaten abonesiniz, yeni ilanlar geldikçe bilgilendirileceksiniz.")
+        logger.info(f"Existing subscriber: {chat_id}")
 
-    # Diğer mesajlar için yardımcı komut
-    @bot.message_handler(func=lambda message: True)
-    def default_reply(message):
-        try:
-            bot.send_message(message.chat.id, "Lütfen /start yazarak abone olun.")
-        except Exception as e:
-            logger.error(f"Default handler hatası: {e}")
+# Diğer mesajlar
+@bot.message_handler(func=lambda message: True)
+def echo_all(message):
+    bot.reply_to(message, "Lütfen /start yazarak abone olun.")
+
+# Webhook route
+@app.route(f'/{TOKEN}', methods=['POST'])
+def webhook():
+    json_str = flask.request.get_data().decode('utf-8')
+    update = telebot.types.Update.de_json(json_str)
+    bot.process_new_updates([update])
+    return ''
+
+# Webhook kontrol sayfası
+@app.route('/')
+def index():
+    return 'Bot is running'
 
 # Önceki ilanları oku
 def okunan_linkler():
@@ -91,35 +87,28 @@ def okunan_linkler():
         with open(GECMIS_DOSYA, "w", encoding="utf-8") as f:
             pass
         return set()
-    
-    try:
-        with open(GECMIS_DOSYA, "r", encoding="utf-8") as f:
-            return set(line.strip() for line in f)
-    except Exception as e:
-        logger.error(f"Okunan linkler hatası: {e}")
-        return set()
+        
+    with open(GECMIS_DOSYA, "r", encoding="utf-8") as f:
+        return set(line.strip() for line in f)
 
-def yeni_ilanlari_bul():
-    if not bot:
-        logger.error("Bot henüz başlatılmadı, ilanlar kontrol edilemiyor")
-        return
-
-    logger.info("🔍 İlanlar kontrol ediliyor...")
+# İlanları kontrol et
+def check_jobs():
+    logger.info("Checking for new jobs...")
     try:
         r = requests.get(URL, verify=False, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
 
         # İlanları bul
         ilanlar = soup.find_all("a", class_="card-list-item")
-        logger.info(f"📦 Bulunan ilan sayısı: {len(ilanlar)}")
+        logger.info(f"Found {len(ilanlar)} jobs")
 
         onceki_linkler = okunan_linkler()
         yeni_linkler = []
-
+        
         # Aboneleri oku
         subscribers = read_subscribers()
         if not subscribers:
-            logger.warning("⚠️ Hiç abone bulunamadı!")
+            logger.warning("No subscribers found!")
             return
 
         for ilan in ilanlar:
@@ -129,9 +118,6 @@ def yeni_ilanlari_bul():
                 baslik = ilan.find("h3", class_="card-header").get_text(strip=True)
                 tarih = ilan.find("div", class_="card-footer").get_text(strip=True)
 
-                # Debug log
-                logger.debug(f"[DEBUG] {baslik} | {tarih} → {link}")
-
                 if link not in onceki_linkler:
                     mesaj = (
                         f"📢 *Yeni İlan*\n"
@@ -140,110 +126,57 @@ def yeni_ilanlari_bul():
                         f"{link}"
                     )
                     
-                    # Tüm abonelere gönder
-                    basarili_gonderim = 0
+                    # Send to all subscribers
                     for chat_id in subscribers:
                         try:
                             bot.send_message(chat_id, mesaj, parse_mode="Markdown")
-                            basarili_gonderim += 1
-                            logger.info(f"✅ İlan gönderildi: chat_id={chat_id}")
+                            logger.info(f"Sent notification to {chat_id}")
                         except Exception as e:
-                            logger.error(f"⚠️ Mesaj gönderme hatası (chat_id={chat_id}): {e}")
+                            logger.error(f"Failed to send message to {chat_id}: {e}")
                     
-                    if basarili_gonderim > 0:
-                        yeni_linkler.append(link)
-                        logger.info(f"✅ İlan {basarili_gonderim} aboneye gönderildi: {baslik}")
+                    yeni_linkler.append(link)
+                    logger.info(f"New job: {baslik}")
                 else:
-                    logger.debug(f"⏭️ Zaten gönderilmiş, atlanıyor: {link}")
+                    logger.debug(f"Already seen: {baslik}")
             except Exception as e:
-                logger.error(f"⚠️ İlan işleme hatası: {e}")
-                continue
+                logger.error(f"Error processing job: {e}")
 
-        # Sonuçları kaydet
+        # Save new links
         if yeni_linkler:
-            try:
-                with open(GECMIS_DOSYA, "a", encoding="utf-8") as f:
-                    for l in yeni_linkler:
-                        f.write(l + "\n")
-                logger.info(f"✅ {len(yeni_linkler)} yeni ilan kaydedildi.")
-            except Exception as e:
-                logger.error(f"⚠️ İlan kaydetme hatası: {e}")
+            with open(GECMIS_DOSYA, "a", encoding="utf-8") as f:
+                for l in yeni_linkler:
+                    f.write(l + "\n")
+            logger.info(f"Saved {len(yeni_linkler)} new jobs")
         else:
-            logger.info("🔍 Yeni ilan bulunamadı.")
+            logger.info("No new jobs found")
     except Exception as e:
-        logger.error(f"⚠️ Ana hata: {e}")
+        logger.error(f"Error checking jobs: {e}")
 
-# Arka planda ilan kontrol döngüsü
-def scheduled_job():
-    counter = 0
+# Scheduled task to check jobs
+def scheduled_task():
     while True:
         try:
-            counter += 1
-            yeni_ilanlari_bul()
-            
-            # Her 6 saat'te bir mesaj yaz (36 kez 10 dakika = 6 saat)
-            if counter % 36 == 0:
-                logger.info(f"ℹ️ Bot hala çalışıyor, son {counter} kontrolde sorunsuz.")
+            check_jobs()
         except Exception as e:
-            logger.error(f"⚠️ Zamanlanmış iş hatası: {e}")
+            logger.error(f"Scheduled task error: {e}")
         
-        # Her döngü sonrası 10 dakika bekle
-        time.sleep(600)
-
-def start_bot_with_retry():
-    max_retries = 5
-    retry_count = 0
-    
-    while retry_count < max_retries:
-        try:
-            global bot
-            bot = setup_bot()
-            setup_handlers(bot)
-            
-            # Scraper thread başlat
-            threading.Thread(target=scheduled_job, daemon=True).start()
-            logger.info("📣 Bot başlatıldı, polling başlıyor...")
-            
-            # Long polling başlat (hata toleranslı)
-            bot.infinity_polling(timeout=30, long_polling_timeout=15, allowed_updates=["message"])
-            
-            # Eğer infinity_polling'den normal şekilde çıkarsa, başarılı
-            logger.info("Bot normale döndü, çıkılıyor.")
-            break
-        
-        except Exception as e:
-            retry_count += 1
-            logger.error(f"⚠️ Bot başlatma hatası (deneme {retry_count}/{max_retries}): {e}")
-            
-            if retry_count >= max_retries:
-                logger.critical("⛔ Maksimum yeniden deneme sayısına ulaşıldı, çıkılıyor.")
-                break
-                
-            # Her başarısız denemeden sonra 30 saniye bekle
-            time.sleep(30)
+        logger.info("Sleeping for 10 minutes...")
+        time.sleep(600)  # 10 dakika
 
 if __name__ == "__main__":
-    # İlk çalıştırmada dosyaların varlığını kontrol et
-    if not os.path.exists(GECMIS_DOSYA):
-        with open(GECMIS_DOSYA, "w", encoding="utf-8") as f:
-            pass
-        logger.info(f"📄 {GECMIS_DOSYA} dosyası oluşturuldu.")
+    # Remove existing webhook
+    bot.remove_webhook()
+    time.sleep(1)
     
-    if not os.path.exists(SUBSCRIBERS_FILE):
-        with open(SUBSCRIBERS_FILE, "w", encoding="utf-8") as f:
-            pass
-        logger.info(f"📄 {SUBSCRIBERS_FILE} dosyası oluşturuldu.")
+    # Set webhook
+    webhook_url = f"{app_url}/{TOKEN}"
+    bot.set_webhook(url=webhook_url)
+    logger.info(f"Webhook set: {webhook_url}")
     
-    # Botun webhook'larını temizle
-    bot = telebot.TeleBot(TOKEN)
-    try:
-        bot.remove_webhook()
-        logger.info("Önceki webhook temizlendi")
-    except Exception as e:
-        logger.warning(f"Webhook temizlenirken hata: {e}")
+    # Start the job checking thread in a separate thread
+    import threading
+    threading.Thread(target=scheduled_task, daemon=True).start()
     
-    # Biraz bekle
-    time.sleep(3)
-    
-    # Bot başlatma, yeniden deneme mekanizması ile
-    start_bot_with_retry()
+    # Start Flask server
+    logger.info(f"Starting Flask server on port {PORT}")
+    app.run(host='0.0.0.0', port=PORT)
