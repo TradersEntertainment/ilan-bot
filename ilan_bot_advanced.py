@@ -185,32 +185,46 @@ def ilanlari_kontrol_et():
         r = requests.get(URL, verify=False, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
         
-        # Site başlığını kontrol et
-        logger.info(f"Sayfa içeriği: {soup.title.text if soup.title else 'Title yok'}")
+        # 1. Doğrudan verdiğiniz link formatını ara
+        pattern1 = r'Araştırma Görevlisi.+?Uzman\s*\((\d+)\)'
         
-        # İlan sayısını bul
-        ilan_sayisi_patterns = [
-            r'Toplam (\d+) ilan',  # Örnek: "Toplam 13 ilan"
-            r'Akademik Personel Alımları\s*\((\d+)\)',  # Örnek: "Akademik Personel Alımları (13)"
-            r'Araştırma Görevlisi & Öğretim Görevlisi & Uzman\s*\((\d+)\)'  # Örnek: "Araştırma Görevlisi & Öğretim Görevlisi & Uzman (13)"
-        ]
-        
-        # Sayfadaki tüm metinleri birleştir
+        # Tüm metinde ara
         page_text = soup.get_text()
         
-        # Her pattern'i dene
+        # Pattern 1 ile ara
         found_ilan_sayisi = 0
-        for pattern in ilan_sayisi_patterns:
-            matches = re.search(pattern, page_text)
-            if matches:
-                found_ilan_sayisi = int(matches.group(1))
-                logger.info(f"İlan sayısı bulundu: {found_ilan_sayisi} [Pattern: {pattern}]")
-                break
+        match1 = re.search(pattern1, page_text)
+        if match1:
+            found_ilan_sayisi = int(match1.group(1))
+            logger.info(f"İlan sayısı bulundu (Pattern 1): {found_ilan_sayisi}")
+        
+        # Bulunamadıysa, alternatif yöntem
+        if found_ilan_sayisi == 0:
+            # 2. Tüm linklerde parantez içi sayıları tara
+            for link in soup.find_all("a"):
+                link_text = link.get_text().strip()
+                if "Araştırma Görevlisi" in link_text and "Uzman" in link_text:
+                    # Parantez içi sayıyı ara
+                    match2 = re.search(r'\((\d+)\)', link_text)
+                    if match2:
+                        found_ilan_sayisi = int(match2.group(1))
+                        logger.info(f"İlan sayısı bulundu (Link içinde): {found_ilan_sayisi}")
+                        break
+        
+        # Hala bulunamadıysa
+        if found_ilan_sayisi == 0:
+            # 3. Kaba arama - tüm parantez içi sayıları bul
+            all_parenthesis_numbers = re.findall(r'\((\d+)\)', page_text)
+            if all_parenthesis_numbers:
+                logger.info(f"Bulunan tüm parantez içi sayılar: {all_parenthesis_numbers}")
+                # İlk bulunan sayıyı kullan
+                found_ilan_sayisi = int(all_parenthesis_numbers[0])
+                logger.info(f"İlan sayısı bulundu (Parantez içi ilk sayı): {found_ilan_sayisi}")
         
         if found_ilan_sayisi == 0:
             logger.warning("❗ İlan sayısı bulunamadı! Sayfa yapısı değişmiş olabilir.")
             return
-            
+        
         # Global değişkeni güncelle
         current_ilan_count = found_ilan_sayisi
         
@@ -261,8 +275,7 @@ def ilanlari_kontrol_et():
                 azalan_ilan_sayisi = son_ilan_sayisi - found_ilan_sayisi
                 logger.warning(f"⚠️ İlan sayısı azalmış: {son_ilan_sayisi} -> {found_ilan_sayisi} ({azalan_ilan_sayisi} ilan azaldı)")
                 
-                # Burada ilan azalmasını da bildirebilirsiniz (opsiyonel)
-                # Örnek olarak, abonelere ilan sayısının azaldığını bildirelim
+                # Abonelere ilan sayısının azaldığını bildirelim
                 subscribers = read_subscribers()
                 if subscribers:
                     mesaj = (
