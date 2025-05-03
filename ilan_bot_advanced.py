@@ -49,36 +49,43 @@ def okunan_linkler():
     with open(GECMIS_DOSYA, "r", encoding="utf-8") as f:
         return set(line.strip() for line in f)
 
-# Yeni ilanları kontrol et
 def yeni_ilanlari_bul():
     print("🔍 İlanlar kontrol ediliyor...")
-    try:
-        r = requests.get(URL, verify=False, timeout=15)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        alintilar = soup.find_all("div", class_="quote")
+    r = requests.get(URL, verify=False)
+    soup = BeautifulSoup(r.text, 'html.parser')
 
-        onceki = okunan_linkler()
-        yeniler = []
-        subs = read_subscribers()
+    # En başta kaç tane eleman bulduğumuzu logla:
+    ilanlar = soup.find_all("div", class_="card-body")
+    print(f"📦 Bulunan card-body sayısı: {len(ilanlar)}")
 
-        for alinti in alintilar:
-            metin = alinti.find("span", class_="text").text.strip()
-            if metin not in onceki:
-                yeniler.append(metin)
-                for uid in subs:
-                    bot.send_message(uid, f"💬 Yeni alıntı:\n{metin}")
-                print(f"✅ Yeni alıntı gönderildi: {metin}")
-            else:
-                print("⏭️ Zaten gönderilmiş: atlanıyor.")
+    onceki_linkler = okunan_linkler()
+    yeni_linkler = []
 
-        if yeniler:
-            with open(GECMIS_DOSYA, "a", encoding="utf-8") as f:
-                for m in yeniler:
-                    f.write(m + "\n")
-        else:
-            print("🔍 Yeni alıntı bulunamadı.")
-    except Exception as e:
-        print(f"🚫 Hata: {e}")
+    for ilan in ilanlar:
+        try:
+            a_tag = ilan.find("a")
+            baslik = a_tag.text.strip()
+            link = "https://www.ilan.gov.tr" + a_tag["href"]
+
+            # İşte burası: her bulduğumuz linki logluyoruz
+            print(f"[DEBUG] Bulunan ilan: “{baslik}” → {link}")
+
+            if link not in onceki_linkler:
+                mesaj = f"📢 Yeni ilan:\n{baslik}\n{link}"
+                bot.send_message(CHAT_ID, mesaj)
+                yeni_linkler.append(link)
+        except Exception as e:
+            print(f"⚠️ Döngü hatası: {e}")
+            continue
+
+    # Sonuçları kaydet
+    if yeni_linkler:
+        with open(GECMIS_DOSYA, "a", encoding="utf-8") as f:
+            for l in yeni_linkler:
+                f.write(l + "\n")
+    else:
+        print("⏭️ Yeni ilan bulunamadı ya da zaten gönderilmiş.")
+
 
 # Arka planda ilan kontrol döngüsü
 def scrap_loop():
