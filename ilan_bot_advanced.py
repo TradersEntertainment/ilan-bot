@@ -4,10 +4,27 @@ import telebot
 import time
 import os
 import threading
+import logging
+import flask
+
+# Logging ayarları
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Flask uygulaması (webhook için)
+app = flask.Flask(__name__)
 
 # Telegram bilgileri
 TOKEN = os.environ.get("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
+
+# Render.com spesifik ayarlar
+PORT = int(os.environ.get('PORT', 5000))
+WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL')
+if WEBHOOK_URL:
+    logger.info(f"Webhook URL: {WEBHOOK_URL}")
+else:
+    logger.warning("RENDER_EXTERNAL_URL bulunamadı, webhook kullanılmayacak")
 
 # URL ve geçmiş dosyası
 URL = "https://www.ilan.gov.tr/ilan/kategori/693/arastirma-gorevlisi-ogretim-gorevlisi-uzman"
@@ -45,19 +62,21 @@ def default_reply(message):
 # Önceki ilanları oku
 def okunan_linkler():
     if not os.path.exists(GECMIS_DOSYA):
+        with open(GECMIS_DOSYA, "w", encoding="utf-8") as f:
+            pass
         return set()
     with open(GECMIS_DOSYA, "r", encoding="utf-8") as f:
         return set(line.strip() for line in f)
 
 def yeni_ilanlari_bul():
-    print("🔍 İlanlar kontrol ediliyor...")
+    logger.info("🔍 İlanlar kontrol ediliyor...")
     try:
         r = requests.get(URL, verify=False, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
 
         # İlanları bul
         ilanlar = soup.find_all("a", class_="card-list-item")
-        print(f"📦 Bulunan ilan sayısı: {len(ilanlar)}")
+        logger.info(f"📦 Bulunan ilan sayısı: {len(ilanlar)}")
 
         onceki_linkler = okunan_linkler()
         yeni_linkler = []
@@ -65,7 +84,7 @@ def yeni_ilanlari_bul():
         # Aboneleri oku
         subscribers = read_subscribers()
         if not subscribers:
-            print("⚠️ Hiç abone bulunamadı!")
+            logger.warning("⚠️ Hiç abone bulunamadı!")
 
         for ilan in ilanlar:
             try:
@@ -75,7 +94,7 @@ def yeni_ilanlari_bul():
                 tarih = ilan.find("div", class_="card-footer").get_text(strip=True)
 
                 # Debug log
-                print(f"[DEBUG] {baslik} | {tarih} → {link}")
+                logger.debug(f"[DEBUG] {baslik} | {tarih} → {link}")
 
                 if link not in onceki_linkler:
                     mesaj = (
@@ -89,15 +108,15 @@ def yeni_ilanlari_bul():
                     for chat_id in subscribers:
                         try:
                             bot.send_message(chat_id, mesaj, parse_mode="Markdown")
-                            print(f"✅ İlan gönderildi: chat_id={chat_id}")
+                            logger.info(f"✅ İlan gönderildi: chat_id={chat_id}")
                         except Exception as e:
-                            print(f"⚠️ Mesaj gönderme hatası (chat_id={chat_id}): {e}")
+                            logger.error(f"⚠️ Mesaj gönderme hatası (chat_id={chat_id}): {e}")
                     
                     yeni_linkler.append(link)
                 else:
-                    print(f"⏭️ Zaten gönderilmiş, atlanıyor: {link}")
+                    logger.debug(f"⏭️ Zaten gönderilmiş, atlanıyor: {link}")
             except Exception as e:
-                print(f"⚠️ İlan işleme hatası: {e}")
+                logger.error(f"⚠️ İlan işleme hatası: {e}")
                 continue
 
         # Sonuçları kaydet
@@ -105,39 +124,61 @@ def yeni_ilanlari_bul():
             with open(GECMIS_DOSYA, "a", encoding="utf-8") as f:
                 for l in yeni_linkler:
                     f.write(l + "\n")
-            print(f"✅ {len(yeni_linkler)} yeni ilan kaydedildi.")
+            logger.info(f"✅ {len(yeni_linkler)} yeni ilan kaydedildi.")
         else:
-            print("🔍 Yeni ilan bulunamadı.")
+            logger.info("🔍 Yeni ilan bulunamadı.")
     except Exception as e:
-        print(f"⚠️ Ana hata: {e}")
+        logger.error(f"⚠️ Ana hata: {e}")
 
-# Arka planda ilan kontrol döngüsü
-def scrap_loop():
+# Flask webhook route
+@app.route('/' + TOKEN, methods=['POST'])
+def getMessage():
+    json_string = flask.request.get_data().decode('utf-8')
+    update = telebot.types.Update.de_json(json_string)
+    bot.process_new_updates([update])
+    return "!", 200
+
+@app.route("/")
+def webhook():
+    bot.remove_webhook()
+    if WEBHOOK_URL:
+        bot.set_webhook(url=WEBHOOK_URL + '/' + TOKEN)
+        return f"Webhook ayarlandı: {WEBHOOK_URL}", 200
+    return "Webhook URL bulunamadı", 400
+
+# Düzenli kontrol işlevi
+def scheduled_job():
     while True:
         try:
             yeni_ilanlari_bul()
         except Exception as e:
-            print(f"⚠️ Scraper döngü hatası: {e}")
-        
-        time.sleep(600)  # 10 dakika (saniye olarak)
+            logger.error(f"⚠️ Zamanlanmış iş hatası: {e}")
+        time.sleep(600)  # 10 dakika
 
 if __name__ == "__main__":
     # İlk çalıştırmada dosyaların varlığını kontrol et
     if not os.path.exists(GECMIS_DOSYA):
         with open(GECMIS_DOSYA, "w", encoding="utf-8") as f:
             pass
-        print(f"📄 {GECMIS_DOSYA} dosyası oluşturuldu.")
+        logger.info(f"📄 {GECMIS_DOSYA} dosyası oluşturuldu.")
     
     if not os.path.exists(SUBSCRIBERS_FILE):
         with open(SUBSCRIBERS_FILE, "w", encoding="utf-8") as f:
             pass
-        print(f"📄 {SUBSCRIBERS_FILE} dosyası oluşturuldu.")
+        logger.info(f"📄 {SUBSCRIBERS_FILE} dosyası oluşturuldu.")
     
-    # Scraper thread başlat
-    threading.Thread(target=scrap_loop, daemon=True).start()
-    print("📣 Bot başlatıldı, abonelik bekleniyor...")
-    
-    try:
-        bot.polling(non_stop=True)
-    except Exception as e:
-        print(f"⚠️ Bot çalışma hatası: {e}")
+    # Render.com'da webhook kullan, yoksa normal polling
+    if WEBHOOK_URL:
+        # Scraper thread başlat
+        threading.Thread(target=scheduled_job, daemon=True).start()
+        logger.info("📣 Webhook modu ile bot başlatıldı")
+        # Flask uygulamasını çalıştır
+        app.run(host="0.0.0.0", port=PORT)
+    else:
+        # Webhook temizle ve polling moduna geç
+        bot.remove_webhook()
+        # Scraper thread başlat
+        threading.Thread(target=scheduled_job, daemon=True).start()
+        logger.info("📣 Polling modu ile bot başlatıldı")
+        # Long polling başlat
+        bot.infinity_polling(timeout=10, long_polling_timeout=5)
